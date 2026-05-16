@@ -7,6 +7,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'lty-speak-secure-2026')
+# SocketIO Setup für Northflank (CORS erlaubt Zugriffe von der Northflank-URL)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 DB_FILE = 'lty_speak.db'
@@ -19,6 +20,7 @@ def get_db():
 
 def init_db():
     with get_db() as conn:
+        # Tabellen für User, Freunde und Chat-Verlauf
         conn.execute('''CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY, nickname TEXT, password TEXT, 
             is_owner INTEGER, prefix TEXT, banner_color TEXT, status_msg TEXT)''')
@@ -27,7 +29,7 @@ def init_db():
         conn.execute('''CREATE TABLE IF NOT EXISTS messages (
             room_id TEXT, sender TEXT, sender_nick TEXT, text TEXT, time TEXT, is_owner INTEGER, prefix TEXT)''')
         
-        # Erstelle 9lty als Owner, falls er nicht existiert
+        # Erstelle 9lty als Owner mit deinem Passwort, falls er noch nicht existiert
         owner = conn.execute('SELECT * FROM users WHERE username = ?', ('9lty',)).fetchone()
         if not owner:
             conn.execute('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -37,7 +39,7 @@ def init_db():
 init_db()
 
 # ==============================================================================
-# UI DESIGN (In-Code)
+# UI DESIGN (HTML & CSS direkt im Code)
 # ==============================================================================
 CSS = """
 <style>
@@ -86,7 +88,7 @@ LAYOUT = CSS + """
         </div>
         <div class="user-panel">
             <div style="width:32px; height:32px; border-radius:50%; background:var(--brand-yellow); color:black; display:flex; align-items:center; justify-content:center; font-weight:bold;">{{ user.nickname[0].upper() }}</div>
-            <div style="flex-grow:1; font-size:13px; font-weight:600;">{{ user.nickname }}</div>
+            <div style="flex-grow:1; font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ user.nickname }}</div>
             <div style="cursor:pointer;" onclick="document.getElementById('set-m').style.display='flex'">⚙️</div>
         </div>
     </div>
@@ -126,23 +128,25 @@ LAYOUT = CSS + """
     <h3 style="color:var(--brand-yellow);">Settings</h3>
     <form action="/update" method="POST">
         <label style="font-size:12px;">NICKNAME</label><input name="n" value="{{ user.nickname }}" style="width:100%; padding:10px; background:#1e1f22; border:none; color:white; margin-bottom:10px;">
-        <button style="width:100%; background:var(--brand-yellow); border:none; padding:10px; font-weight:bold;">Save</button>
+        <button style="width:100%; background:var(--brand-yellow); border:none; padding:10px; font-weight:bold;">Save Nickname</button>
     </form>
+    
     {% if user.is_owner %}
     <div style="border-top:1px solid #444; margin-top:20px; padding-top:10px;">
-        <h4 style="color:var(--owner-red);">Admin Panel</h4>
+        <h4 style="color:var(--owner-red);">Admin: User Prefixes</h4>
         <form action="/admin_prefix" method="POST">
             {% for u in all_users %}
-            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                <span>{{ u.username }}</span>
-                <input name="pre_{{ u.username }}" value="{{ u.prefix or '' }}" placeholder="Prefix" style="background:#1e1f22; border:none; color:white; padding:2px 5px; width:100px;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:5px; align-items:center;">
+                <span style="font-size:13px;">{{ u.username }}</span>
+                <input name="pre_{{ u.username }}" value="{{ u.prefix or '' }}" placeholder="z.B. VIP" style="background:#1e1f22; border:none; color:white; padding:4px 8px; width:100px; border-radius:3px;">
             </div>
             {% endfor %}
-            <button style="width:100%; background:var(--owner-red); color:white; border:none; padding:10px; font-weight:bold;">Update Prefixes</button>
+            <button style="width:100%; background:var(--owner-red); color:white; border:none; padding:10px; font-weight:bold; margin-top:10px;">Update All Prefixes</button>
         </form>
     </div>
     {% endif %}
-    <button onclick="document.getElementById('set-m').style.display='none'" style="width:100%; background:none; border:none; color:white; margin-top:10px;">Close</button>
+    <button onclick="document.getElementById('set-m').style.display='none'" style="width:100%; background:none; border:none; color:white; margin-top:10px; cursor:pointer;">Close</button>
+    <div style="margin-top:15px; text-align:center;"><a href="/logout" style="color:#ff4444; text-decoration:none; font-size:12px;">Logout</a></div>
 </div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socketio/4.0.1/socketio.js"></script>
@@ -150,18 +154,36 @@ LAYOUT = CSS + """
     const socket = io();
     const box = document.getElementById('m-box');
     if(box) box.scrollTop = box.scrollHeight;
-    function send(e) { if(e.key==='Enter' && document.getElementById('ci').value) { socket.emit('msg', { t: "{{ p_name }}", m: document.getElementById('ci').value }); document.getElementById('ci').value=''; } }
+
+    function send(e) {
+        if(e.key === 'Enter') {
+            const i = document.getElementById('ci');
+            if(!i.value) return;
+            socket.emit('msg', { t: "{{ p_name }}", m: i.value });
+            i.value = '';
+        }
+    }
+
     socket.on('rec', (d) => {
         const div = document.createElement('div'); div.className = 'msg';
-        div.innerHTML = `<div style="width:40px; height:40px; background:#444; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center;">${d.sender_nick[0].toUpperCase()}</div>
-            <div><div>${d.prefix ? `<span class="prefix ${d.is_owner?'p-owner':''}">${d.prefix}</span>` : ''}<span class="author ${d.is_owner?'is-owner':''}">${d.sender_nick}</span><span style="font-size:12px; color:var(--text-muted); margin-left:8px;">${d.time}</span></div><div>${d.text}</div></div>`;
-        box.appendChild(div); box.scrollTop = box.scrollHeight;
+        div.innerHTML = `
+            <div style="width:40px; height:40px; background:#444; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center;">${d.sender_nick[0].toUpperCase()}</div>
+            <div>
+                <div>
+                    ${d.prefix ? `<span class="prefix ${d.is_owner?'p-owner':''}">${d.prefix}</span>` : ''}
+                    <span class="author ${d.is_owner?'is-owner':''}">${d.sender_nick}</span>
+                    <span style="font-size:12px; color:var(--text-muted); margin-left:8px;">${d.time}</span>
+                </div>
+                <div style="margin-top:2px;">${d.text}</div>
+            </div>`;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
     });
 </script>
 """
 
 # ==============================================================================
-# ROUTEN
+# LOGIK / ROUTEN
 # ==============================================================================
 
 @app.route('/')
@@ -179,6 +201,7 @@ def chat(name):
     db = get_db()
     u = db.execute('SELECT * FROM users WHERE username = ?', (session['u'],)).fetchone()
     p = db.execute('SELECT * FROM users WHERE username = ?', (name,)).fetchone()
+    if not p: return redirect('/')
     friends = [f['user2'] for f in db.execute('SELECT user2 FROM friends WHERE user1 = ?', (session['u'],)).fetchall()]
     rid = "_".join(sorted([session['u'], name]))
     history = db.execute('SELECT * FROM messages WHERE room_id = ?', (rid,)).fetchall()
@@ -189,24 +212,27 @@ def chat(name):
 def login():
     if request.method == 'POST':
         db = get_db()
-        u = db.execute('SELECT * FROM users WHERE username = ?', (request.form['u'].lower(),)).fetchone()
+        u = db.execute('SELECT * FROM users WHERE username = ?', (request.form['u'].lower().strip(),)).fetchone()
         if u and check_password_hash(u['password'], request.form['p']):
             session['u'] = u['username']
             return redirect('/')
-    return 'LOGIN: <form method="POST"><input name="u" placeholder="User"><input name="p" type="password"><button>Go</button></form><br><a href="/reg">Register</a>'
+    return '<h2>Lty Speak - Login</h2><form method="POST"><input name="u" placeholder="Username"><input name="p" type="password" placeholder="Passwort"><button>Login</button></form><br><a href="/reg">Registrieren</a>'
 
 @app.route('/reg', methods=['GET', 'POST'])
 def reg():
     if request.method == 'POST':
         db = get_db()
-        db.execute('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (request.form['u'].lower(), request.form['n'], generate_password_hash(request.form['p']), 0, '', '#4e5058', 'Hi!'))
-        db.commit()
-        return redirect('/login')
-    return 'REGISTER: <form method="POST"><input name="u" placeholder="Login Name"><input name="n" placeholder="Nickname"><input name="p" type="password"><button>Create</button></form>'
+        try:
+            db.execute('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (request.form['u'].lower().strip(), request.form['n'], generate_password_hash(request.form['p']), 0, '', '#4e5058', 'Hi!'))
+            db.commit()
+            return redirect('/login')
+        except: return "Fehler: User existiert bereits."
+    return '<h2>Lty Speak - Account erstellen</h2><form method="POST"><input name="u" placeholder="Login-Name"><input name="n" placeholder="Anzeigename (Nick)"><input name="p" type="password" placeholder="Passwort"><button>Registrieren</button></form>'
 
 @app.route('/update', methods=['POST'])
 def update():
+    if 'u' not in session: return redirect('/login')
     db = get_db()
     db.execute('UPDATE users SET nickname = ? WHERE username = ?', (request.form['n'], session['u']))
     db.commit()
@@ -214,33 +240,49 @@ def update():
 
 @app.route('/admin_prefix', methods=['POST'])
 def admin_prefix():
+    if 'u' not in session: return redirect('/login')
     db = get_db()
     u = db.execute('SELECT is_owner FROM users WHERE username = ?', (session['u'],)).fetchone()
-    if u['is_owner']:
+    if u and u['is_owner']:
         for key, val in request.form.items():
             if key.startswith('pre_'):
-                uname = key.replace('pre_', '')
-                db.execute('UPDATE users SET prefix = ? WHERE username = ?', (val, uname))
+                target_user = key.replace('pre_', '')
+                db.execute('UPDATE users SET prefix = ? WHERE username = ?', (val, target_user))
         db.commit()
     return redirect('/')
 
 @app.route('/add_friend', methods=['POST'])
 def add_friend():
+    if 'u' not in session: return redirect('/login')
     db = get_db()
-    f = request.form['fu'].lower()
+    f = request.form['fu'].lower().strip()
     if db.execute('SELECT * FROM users WHERE username = ?', (f,)).fetchone():
         db.execute('INSERT OR IGNORE INTO friends VALUES (?, ?)', (session['u'], f))
         db.execute('INSERT OR IGNORE INTO friends VALUES (?, ?)', (f, session['u']))
         db.commit()
     return redirect('/')
 
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
 @socketio.on('msg')
 def handle_msg(d):
+    if 'u' not in session: return
     db = get_db()
     u = db.execute('SELECT * FROM users WHERE username = ?', (session['u'],)).fetchone()
     t = datetime.datetime.now().strftime("%H:%M")
     rid = "_".join(sorted([session['u'], d['t']]))
-    msg_data = {'sender_nick': u['nickname'], 'text': d['m'], 'time': t, 'is_owner': u['is_owner'], 'prefix': u['prefix']}
+    
+    msg_data = {
+        'sender_nick': u['nickname'], 
+        'text': d['m'], 
+        'time': t, 
+        'is_owner': u['is_owner'], 
+        'prefix': u['prefix']
+    }
+    
     db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)',
                (rid, session['u'], u['nickname'], d['m'], t, u['is_owner'], u['prefix']))
     db.commit()
@@ -252,4 +294,6 @@ def cn():
     if 'u' in session: join_room(session['u'])
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    # Port dynamisch für Hosting-Anbieter (Northflank/Railway/Render) setzen
+    port = int(os.environ.get('PORT', 5000))
+    socketio.run(app, host='0.0.0.0', port=port)
